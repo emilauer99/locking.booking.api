@@ -1,34 +1,20 @@
-version: '2'
-
+# Shared part of the system (database and ui).
+# Combine it with exactly one api file:
+#   docker compose -f docker-compose.yml -f docker-compose.spring.yml up --build
+#   docker compose -f docker-compose.yml -f docker-compose.dotnet.yml up --build
+# A plain "docker compose up" picks the spring-boot api (see .env).
 services:
   ui:
     image: 'booking_ui'
     build:
-      context: .
+      context: ./ui/msa-booking-app/
     ports:
       - "80:80"
     container_name: booking_ui_1
-    depends_on:
-      - app
-
-  app:
-    image: 'booking_api'
-    build:
-      context: .
-    ports:
-      - "8080:8080"
-    container_name: booking_api_1
-    depends_on:
-      - db
-    environment:
-      - SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/compose-postgres
-      - SPRING_DATASOURCE_USERNAME=compose-postgres
-      - SPRING_DATASOURCE_PASSWORD=compose-postgres
-      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
 
   db:
     image: 'postgres:17.2-alpine'
-    ports: 
+    ports:
       - "5432:5432"
     container_name: db
     environment:

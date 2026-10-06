@@ -10,7 +10,7 @@ public class BookingConfirmation {
     @GeneratedValue(strategy = GenerationType.AUTO)
     private long id;
 
-    @Column(name = "bookinId")
+    @Column(name = "bookingId")
     private long bookingId;
 
     public BookingConfirmation(long bookingId) {
@@ -21,5 +21,9 @@ public class BookingConfirmation {
 
     public long getBookingId() {
         return bookingId;
+    }
+
+    public long getId() {
+        return id;
     }
 }

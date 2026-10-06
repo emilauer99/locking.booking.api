@@ -12,15 +12,71 @@ builder.Services.AddDbContext<BookingDbContext>(options =>
     options.UseNpgsql(
         builder.Configuration.GetConnectionString("DefaultConnection")));
 
+// CORS is enabled for all origins, methods and headers so that the ui
+// (served from another port) can call the api from the browser
+builder.Services.AddCors(options =>
+    options.AddDefaultPolicy(policy =>
+        policy.AllowAnyOrigin()
+            .AllowAnyMethod()
+            .AllowAnyHeader()));
+
 var app = builder.Build();
 
 app.UseHttpsRedirection();
 
+app.UseCors();
+
 MapOptimisticLockingApi(app);
 
-MapPessemisticLockingApi(app);
+MapPessimisticLockingApi(app);
+
+SeedBookings(app);
 
 app.Run();
+
+static void SeedBookings(WebApplication app)
+{
+    // the database container might still be starting up (docker compose does not
+    // wait until postgres accepts connections), therefore retry a couple of times
+    const int maxAttempts = 10;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++)
+    {
+        try
+        {
+            using var scope = app.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<BookingDbContext>();
+
+            // only seed an empty database, otherwise every restart (or every further
+            // api instance) would add the same bookings again
+            if (db.Booking.Any())
+            {
+                return;
+            }
+
+            db.Booking.AddRange(
+                new Booking("Blue Room", 1, new DateTime(2026, 11, 2), new DateTime(2026, 11, 6)),
+                new Booking("Blue Room", 1, new DateTime(2026, 11, 20), new DateTime(2026, 11, 23)),
+                new Booking("Green Room", 2, new DateTime(2026, 11, 10), new DateTime(2026, 11, 14)),
+                new Booking("Red Suite", 3, new DateTime(2026, 12, 22), new DateTime(2026, 12, 27)),
+                new Booking("Garden View", 4, new DateTime(2027, 1, 5), new DateTime(2027, 1, 9)));
+            db.SaveChanges();
+
+            app.Logger.LogInformation("Seeded database with sample bookings.");
+            return;
+        }
+        catch (Exception e) when (attempt < maxAttempts)
+        {
+            app.Logger.LogWarning("Seeding the database failed (attempt {Attempt}/{MaxAttempts}): {Message}", attempt, maxAttempts, e.Message);
+            Thread.Sleep(TimeSpan.FromSeconds(2));
+        }
+        catch (Exception e)
+        {
+            // e.g. the tables were not created (see Repository/Scripts/CreateDatabase.txt);
+            // the api still starts, only without sample data
+            app.Logger.LogError("Seeding the database failed, starting without sample data: {Message}", e.Message);
+        }
+    }
+}
 
 static void MapOptimisticLockingApi(WebApplication app)
 {
@@ -97,14 +153,14 @@ static void MapOptimisticLockingApi(WebApplication app)
         .WithName("OptimisticCreateBookingConfirmation");
 }
 
-static void MapPessemisticLockingApi(WebApplication app)
+static void MapPessimisticLockingApi(WebApplication app)
 {
-    const string pessemisticUrlPath = "pessemistic";
+    const string pessimisticUrlPath = "pessimistic";
 
-    MapBookingApi(app, pessemisticUrlPath);
+    MapBookingApi(app, pessimisticUrlPath);
 
     app.MapPost(
-    $"/{pessemisticUrlPath}/booking",
+    $"/{pessimisticUrlPath}/booking",
     (Booking booking) =>
     {
         // unfortunately we cannot guarantee that all locations which might
@@ -119,20 +175,20 @@ static void MapPessemisticLockingApi(WebApplication app)
 
         // TODO: assure that the same room cannot be booked twice
         // intention: it might happen for some locations that booking attempts to the same rooms are
-        // made in parallel. Consequently it is better when we prevent this very early in the proce
+        // made in parallel. Consequently it is better when we prevent this very early in the process
 
         using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<BookingDbContext>();
         db.Booking.Add(booking);
         db.SaveChanges();
         return Results.Created(
-            $"/{pessemisticUrlPath}/booking/{booking.Id}",
+            $"/{pessimisticUrlPath}/booking/{booking.Id}",
             booking);
     })
-    .WithName($"{pessemisticUrlPath}CreateBooking");
+    .WithName($"{pessimisticUrlPath}CreateBooking");
 
     app.MapGet(
-        "/pessemistic/bookingconfirmation",
+        "/pessimistic/bookingconfirmation",
         () =>
         {
             using var scope = app.Services.CreateScope();
@@ -142,10 +198,10 @@ static void MapPessemisticLockingApi(WebApplication app)
                 Results.NoContent() :
                 Results.Ok(confirmation.ToList());
         })
-        .WithName("PessemisticGetAllBookingConfirmation");
+        .WithName("PessimisticGetAllBookingConfirmation");
 
     app.MapGet(
-        "/pessemistic/bookingconfirmation/{id}",
+        "/pessimistic/bookingconfirmation/{id}",
         (int id) =>
         {
             using var scope = app.Services.CreateScope();
@@ -155,25 +211,25 @@ static void MapPessemisticLockingApi(WebApplication app)
                 Results.NotFound() :
                 Results.Ok(new { Id = id, Status = "Confirmed" });
         })
-        .WithName("PessemisticGetSpecificBookingConfirmation");
+        .WithName("PessimisticGetSpecificBookingConfirmation");
 
     app.MapPost(
-        "/pessemistic/bookingconfirmation",
+        "/pessimistic/bookingconfirmation",
         (BookingConfirmation bookingConfirmation) =>
         {
-            // This can usually not fail as we are usip/booking/ng pessimistic locking
-            // When this crashes it means that some infratsructure problem occurred
-            // When the confirmation is not written it is indiacating that the transaction
-            // flow was abortzed unexpectedly
+            // This can usually not fail as we are using pessimistic locking
+            // When this crashes it means that some infrastructure problem occurred
+            // When the confirmation is not written it is indicating that the transaction
+            // flow was aborted unexpectedly
             using var scope = app.Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<BookingDbContext>();
             db.Confirmation.Add(bookingConfirmation);
             db.SaveChanges();
             return Results.Created(
-                $"/optimistic/bookingconfirmation/{bookingConfirmation.Id}",
+                $"/pessimistic/bookingconfirmation/{bookingConfirmation.Id}",
                 bookingConfirmation);
         })
-        .WithName("PessemisticCreateBookingConfirmation");
+        .WithName("PessimisticCreateBookingConfirmation");
 }
 
 static void MapBookingApi(WebApplication app, string apiSubpath)

@@ -27,7 +27,7 @@ public class OptimisticBookingController {
     @GetMapping("/booking")
     public ResponseEntity<List<Booking>> getBooking() {
         List<Booking> allBookings = this.bookingRepository.findAll();
-        return new ResponseEntity<>(allBookings, allBookings.isEmpty() ? HttpStatus.NO_CONTENT : HttpStatus.OK );
+        return new ResponseEntity<>(allBookings, HttpStatus.OK);
     }
 
     @PostMapping("/booking")

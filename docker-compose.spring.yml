@@ -1,0 +1,20 @@
+# Spring-boot api, use together with docker-compose.yml
+services:
+  ui:
+    depends_on:
+      - app
+
+  app:
+    image: 'booking_api_spring'
+    build:
+      context: ./spring-boot-api/
+    ports:
+      - "8080:8080"
+    container_name: booking_api_1
+    depends_on:
+      - db
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/compose-postgres
+      - SPRING_DATASOURCE_USERNAME=compose-postgres
+      - SPRING_DATASOURCE_PASSWORD=compose-postgres
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
