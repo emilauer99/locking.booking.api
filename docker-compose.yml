@@ -1,8 +1,6 @@
-# Shared part of the system (database and ui).
-# Combine it with exactly one api file:
+# Shared part of the system (database and ui), combine it with the api file:
 #   docker compose -f docker-compose.yml -f docker-compose.spring.yml up --build
-#   docker compose -f docker-compose.yml -f docker-compose.dotnet.yml up --build
-# A plain "docker compose up" picks the spring-boot api (see .env).
+# A plain "docker compose up" picks the same files (see .env).
 services:
   ui:
     image: 'booking_ui'
@@ -20,3 +18,9 @@ services:
     environment:
       - POSTGRES_USER=compose-postgres
       - POSTGRES_PASSWORD=compose-postgres
+    # the api must not start before the database accepts connections
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U compose-postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

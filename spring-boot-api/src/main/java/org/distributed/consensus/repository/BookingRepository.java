@@ -43,6 +43,32 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
     @Query("select b from Booking b where b.id = :id")
     Optional<Booking> findByIdForUpdate(@Param("id") long id);
 
+    /**
+     * Inserts a reservation, unless it would violate the exclusion constraint bookings_no_overlap.
+     * <p>
+     * A plain INSERT that violates an exclusion constraint can deadlock with a parallel INSERT of an
+     * overlapping booking: both insert their row first, then each waits for the other one while checking
+     * the constraint, until PostgreSQL aborts one of them after deadlock_timeout (1 s).
+     * With ON CONFLICT DO NOTHING PostgreSQL uses speculative insertion, which checks for conflicts before
+     * the row is finally inserted and avoids these deadlocks. The conflict is still detected by the
+     * database when writing, nothing is locked up front.
+     *
+     * @return the id of the new booking, or an empty list if the period is already booked
+     */
+    @Transactional
+    @Query(value = """
+            insert into bookings (name, room_id, start, finish, status, created_at, expires_at, version)
+            values (:name, :roomId, :start, :finish, 'RESERVED', :createdAt, :expiresAt, 0)
+            on conflict do nothing
+            returning id
+            """, nativeQuery = true)
+    List<Long> insertReservationIfFree(@Param("name") String name,
+                                       @Param("roomId") long roomId,
+                                       @Param("start") LocalDate start,
+                                       @Param("finish") LocalDate finish,
+                                       @Param("createdAt") Instant createdAt,
+                                       @Param("expiresAt") Instant expiresAt);
+
     default boolean existsActiveOverlapping(long roomId, LocalDate start, LocalDate finish, Instant now) {
         return !findActiveOverlapping(roomId, start, finish, now).isEmpty();
     }

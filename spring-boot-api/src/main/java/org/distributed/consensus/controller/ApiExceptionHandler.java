@@ -1,5 +1,6 @@
 package org.distributed.consensus.controller;
 
+import java.sql.SQLException;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -43,6 +44,10 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
+    // PostgreSQL error codes, see https://www.postgresql.org/docs/current/errcodes-appendix.html
+    private static final String UNIQUE_VIOLATION = "23505";
+    private static final String EXCLUSION_VIOLATION = "23P01";
+
     // ---- conflicts --------------------------------------------------------------------------
 
     @ExceptionHandler(BookingConflictException.class)
@@ -63,14 +68,21 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * Fallback for constraint violations, e.g. the exclusion constraint against overlapping
-     * bookings acting as safety net.
+     * Fallback for constraint violations. Only the constraints that protect the booking process
+     * are conflicts: the exclusion constraint against overlapping bookings (safety net) and the
+     * unique constraint on the confirmation. Every other violation (not null, foreign key, an
+     * outdated schema, ...) is a bug or a misconfiguration and therefore a technical error.
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ProblemDetail handleDataIntegrityViolation(DataIntegrityViolationException e, WebRequest request) {
-        log.warn("constraint violation on {}: {}", path(request), e.getMostSpecificCause().getMessage());
-        return problem(HttpStatus.CONFLICT, "Booking conflict",
-                "the request conflicts with an existing booking");
+        String sqlState = sqlState(e);
+        if (EXCLUSION_VIOLATION.equals(sqlState) || UNIQUE_VIOLATION.equals(sqlState)) {
+            log.warn("constraint violation on {}: {}", path(request), e.getMostSpecificCause().getMessage());
+            return problem(HttpStatus.CONFLICT, "Booking conflict",
+                    "the request conflicts with an existing booking");
+        }
+        log.error("unexpected constraint violation on {} (SQLSTATE {})", path(request), sqlState, e);
+        return problem(HttpStatus.INTERNAL_SERVER_ERROR, "Internal error", "an unexpected error occurred");
     }
 
     // ---- invalid requests -------------------------------------------------------------------
@@ -135,6 +147,15 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
         problem.setTitle(title);
         return problem;
+    }
+
+    private static String sqlState(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof SQLException sql) {
+                return sql.getSQLState();
+            }
+        }
+        return null;
     }
 
     private static String path(WebRequest request) {

@@ -4,6 +4,7 @@ import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 import org.distributed.consensus.model.Booking;
 import org.distributed.consensus.model.BookingConfirmation;
@@ -25,7 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
  * change is written:
  * <ul>
  *     <li>new bookings: exclusion constraint bookings_no_overlap (no overlapping
- *     RESERVED/CONFIRMED booking for the same room)</li>
+ *     RESERVED/CONFIRMED booking for the same room), used with INSERT ... ON CONFLICT DO NOTHING</li>
  *     <li>confirm/delete: version column of the booking (UPDATE ... WHERE version = ?)
  *     and the unique constraint on bookingsconfirmation.booking_id</li>
  * </ul>
@@ -35,7 +36,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class OptimisticBookingService {
 
     // PostgreSQL error codes, see https://www.postgresql.org/docs/current/errcodes-appendix.html
-    private static final String EXCLUSION_VIOLATION = "23P01";
     private static final String UNIQUE_VIOLATION = "23505";
 
     private static final Logger log = LoggerFactory.getLogger(OptimisticBookingService.class);
@@ -75,19 +75,18 @@ public class OptimisticBookingService {
 
         // as it is expected that a collisions of bookings are rare
         // we believe that we will not run into this error here very often:
-        // no check up front, the constraint decides when the insert is executed
-        try {
-            Booking saved = bookingRepository.saveAndFlush(booking);
-            log.info("optimistic: reserved booking {} for room {} ({} - {}) until {}",
-                    saved.getId(), saved.getRoomId(), saved.getStart(), saved.getFinish(), saved.getExpiresAt());
-            return saved;
-        } catch (DataIntegrityViolationException e) {
-            if (EXCLUSION_VIOLATION.equals(sqlState(e))) {
-                throw new BookingConflictException("room " + booking.getRoomId()
-                        + " is already booked between " + booking.getStart() + " and " + booking.getFinish(), e);
-            }
-            throw e;
+        // no check up front, the exclusion constraint decides when the insert is executed
+        List<Long> inserted = bookingRepository.insertReservationIfFree(booking.getName(), booking.getRoomId(),
+                booking.getStart(), booking.getFinish(), booking.getCreatedAt(), booking.getExpiresAt());
+        if (inserted.isEmpty()) {
+            throw new BookingConflictException("room " + booking.getRoomId()
+                    + " is already booked between " + booking.getStart() + " and " + booking.getFinish());
         }
+
+        Booking saved = bookingRepository.findById(inserted.get(0)).orElseThrow();
+        log.info("optimistic: reserved booking {} for room {} ({} - {}) until {}",
+                saved.getId(), saved.getRoomId(), saved.getStart(), saved.getFinish(), saved.getExpiresAt());
+        return saved;
     }
 
     @Transactional
