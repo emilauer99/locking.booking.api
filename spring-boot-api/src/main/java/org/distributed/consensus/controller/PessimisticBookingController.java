@@ -7,6 +7,7 @@ import org.distributed.consensus.model.CreateBookingRequest;
 import org.distributed.consensus.repository.BookingRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -52,8 +53,16 @@ public class PessimisticBookingController {
             return new ResponseEntity<>(null, HttpStatus.CONFLICT);
         }
 
-        Booking saved = bookingRepository.save(booking);
-        return new ResponseEntity<>(saved, HttpStatus.CREATED);
+        // expired reservations would otherwise still block the period in the exclusion constraint
+        bookingRepository.expireOverlappingReservations(booking.getRoomId(), booking.getStart(), booking.getFinish(), clock.instant());
+
+        try {
+            Booking saved = bookingRepository.save(booking);
+            return new ResponseEntity<>(saved, HttpStatus.CREATED);
+        } catch (DataIntegrityViolationException e) {
+            // the exclusion constraint on bookings is a safety net for this variant as well
+            return new ResponseEntity<>(null, HttpStatus.CONFLICT);
+        }
     }
 
     @DeleteMapping("/booking/{id}")

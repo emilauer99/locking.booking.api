@@ -73,7 +73,8 @@ public class Booking {
     }
 
     public boolean isExpired(Instant now) {
-        return status == BookingStatus.RESERVED && !now.isBefore(expiresAt);
+        return status == BookingStatus.EXPIRED
+                || (status == BookingStatus.RESERVED && !now.isBefore(expiresAt));
     }
 
     /**
