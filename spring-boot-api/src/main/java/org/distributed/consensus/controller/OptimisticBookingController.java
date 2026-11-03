@@ -3,6 +3,7 @@ package org.distributed.consensus.controller;
 import org.distributed.consensus.model.Booking;
 import org.distributed.consensus.model.CreateBookingRequest;
 import org.distributed.consensus.repository.BookingRepository;
+import org.distributed.consensus.service.BookingNotFoundException;
 import org.distributed.consensus.service.OptimisticBookingService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -12,7 +13,6 @@ import org.springframework.web.bind.annotation.*;
 import jakarta.validation.Valid;
 
 import java.util.List;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/optimistic")
@@ -26,8 +26,8 @@ public class OptimisticBookingController {
 
     @GetMapping("/booking/{id}")
     public ResponseEntity<Booking> getBooking(@PathVariable long id) {
-        Optional<Booking> booking = this.bookingRepository.findById(id);
-        return new ResponseEntity<>(booking.orElse(null), booking.isEmpty() ? HttpStatus.NOT_FOUND : HttpStatus.OK);
+        Booking booking = this.bookingRepository.findById(id).orElseThrow(() -> new BookingNotFoundException(id));
+        return new ResponseEntity<>(booking, HttpStatus.OK);
     }
 
     @GetMapping("/booking")

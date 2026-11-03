@@ -1,13 +1,10 @@
 package org.distributed.consensus.service;
 
-import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.ResponseStatus;
-
 /**
  * The request is valid, but cannot be executed in the current state of the booking
  * (overlapping booking, already confirmed/cancelled/expired, concurrent modification).
+ * Answered with 409 by the ApiExceptionHandler.
  */
-@ResponseStatus(HttpStatus.CONFLICT)
 public class BookingConflictException extends RuntimeException {
 
     public BookingConflictException(String message) {

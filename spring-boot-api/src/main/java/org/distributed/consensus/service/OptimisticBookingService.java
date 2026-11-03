@@ -8,10 +8,11 @@ import java.time.Instant;
 import org.distributed.consensus.model.Booking;
 import org.distributed.consensus.model.BookingConfirmation;
 import org.distributed.consensus.model.BookingPolicies;
-import org.distributed.consensus.model.BookingStatus;
 import org.distributed.consensus.model.CreateBookingRequest;
 import org.distributed.consensus.repository.BookingConfirmationRepository;
 import org.distributed.consensus.repository.BookingRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -36,6 +37,8 @@ public class OptimisticBookingService {
     // PostgreSQL error codes, see https://www.postgresql.org/docs/current/errcodes-appendix.html
     private static final String EXCLUSION_VIOLATION = "23P01";
     private static final String UNIQUE_VIOLATION = "23505";
+
+    private static final Logger log = LoggerFactory.getLogger(OptimisticBookingService.class);
 
     private final BookingRepository bookingRepository;
     private final BookingConfirmationRepository confirmationRepository;
@@ -74,7 +77,10 @@ public class OptimisticBookingService {
         // we believe that we will not run into this error here very often:
         // no check up front, the constraint decides when the insert is executed
         try {
-            return bookingRepository.saveAndFlush(booking);
+            Booking saved = bookingRepository.saveAndFlush(booking);
+            log.info("optimistic: reserved booking {} for room {} ({} - {}) until {}",
+                    saved.getId(), saved.getRoomId(), saved.getStart(), saved.getFinish(), saved.getExpiresAt());
+            return saved;
         } catch (DataIntegrityViolationException e) {
             if (EXCLUSION_VIOLATION.equals(sqlState(e))) {
                 throw new BookingConflictException("room " + booking.getRoomId()
@@ -89,14 +95,16 @@ public class OptimisticBookingService {
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new BookingNotFoundException(bookingId));
 
-        ensureReserved(booking, clock.instant());
+        BookingStates.ensureConfirmable(booking, clock.instant());
         booking.confirm();
 
         try {
             // UPDATE bookings ... WHERE id = ? AND version = ?
             // fails if the booking was confirmed, cancelled or expired in the meantime
             bookingRepository.saveAndFlush(booking);
-            return confirmationRepository.saveAndFlush(new BookingConfirmation(bookingId));
+            BookingConfirmation confirmation = confirmationRepository.saveAndFlush(new BookingConfirmation(bookingId));
+            log.info("optimistic: confirmed booking {}", bookingId);
+            return confirmation;
         } catch (ObjectOptimisticLockingFailureException e) {
             throw new BookingConflictException("booking " + bookingId + " was modified concurrently", e);
         } catch (DataIntegrityViolationException e) {
@@ -112,33 +120,16 @@ public class OptimisticBookingService {
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new BookingNotFoundException(bookingId));
 
-        switch (booking.getStatus()) {
-            case CONFIRMED -> throw new BookingConflictException("booking " + bookingId + " is already confirmed");
-            // deleting twice is idempotent, an expired reservation does not need to be cancelled
-            case CANCELLED, EXPIRED -> {
-                return;
-            }
-            case RESERVED -> booking.cancel();
+        if (!BookingStates.cancel(booking)) {
+            return;
         }
 
         try {
             // fails if the booking was confirmed in the meantime
             bookingRepository.saveAndFlush(booking);
+            log.info("optimistic: cancelled booking {}", bookingId);
         } catch (ObjectOptimisticLockingFailureException e) {
             throw new BookingConflictException("booking " + bookingId + " was modified concurrently", e);
-        }
-    }
-
-    private static void ensureReserved(Booking booking, Instant now) {
-        long id = booking.getId();
-        if (booking.getStatus() == BookingStatus.CONFIRMED) {
-            throw new BookingConflictException("booking " + id + " is already confirmed");
-        }
-        if (booking.getStatus() == BookingStatus.CANCELLED) {
-            throw new BookingConflictException("booking " + id + " was cancelled");
-        }
-        if (booking.isExpired(now)) {
-            throw new BookingConflictException("reservation " + id + " has expired");
         }
     }
 
