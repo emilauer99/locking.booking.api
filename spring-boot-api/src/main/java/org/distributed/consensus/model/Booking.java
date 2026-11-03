@@ -1,6 +1,9 @@
 package org.distributed.consensus.model;
 
-import java.sql.Date;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+
 import jakarta.persistence.*;
 
 @Entity
@@ -11,46 +14,123 @@ public class Booking {
     @GeneratedValue(strategy = GenerationType.AUTO)
     private long id;
 
-    @Column(name = "name")
+    @Column(name = "name", nullable = false)
     private String name;
 
-    @Column(name = "roomId")
+    @Column(name = "roomId", nullable = false)
     private long roomId;
 
-    @Column(name = "start")
-    private Date start;
+    @Column(name = "start", nullable = false)
+    private LocalDate start;
 
-    @Column(name = "finish")
-    private Date finish;
+    @Column(name = "finish", nullable = false)
+    private LocalDate finish;
 
-    public Booking(String name, long roomId, Date from, Date end) {
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 16)
+    private BookingStatus status;
+
+    @Column(name = "createdAt", nullable = false)
+    private Instant createdAt;
+
+    // only relevant while the booking is RESERVED: after this point in time
+    // the reservation is no longer valid and the period can be booked again
+    @Column(name = "expiresAt")
+    private Instant expiresAt;
+
+    @Version
+    @Column(name = "version", nullable = false)
+    private long version;
+
+    protected Booking() {
+        // required by JPA
+    }
+
+    private Booking(String name, long roomId, LocalDate start, LocalDate finish,
+                    BookingStatus status, Instant createdAt, Instant expiresAt) {
         this.name = name;
         this.roomId = roomId;
-        this.start = from;
-        this.finish = end;
+        this.start = start;
+        this.finish = finish;
+        this.status = status;
+        this.createdAt = createdAt;
+        this.expiresAt = expiresAt;
     }
 
-    public Booking() {
-
+    /**
+     * Creates a new reservation (step 1 of the booking process) that expires after the given time to live.
+     */
+    public static Booking reserve(String name, long roomId, LocalDate start, LocalDate finish,
+                                  Instant now, Duration reservationTtl) {
+        return new Booking(name, roomId, start, finish, BookingStatus.RESERVED, now, now.plus(reservationTtl));
     }
 
-    public String getName() {
-        return name;
+    /**
+     * Creates an already confirmed booking, e.g. for sample data.
+     */
+    public static Booking confirmed(String name, long roomId, LocalDate start, LocalDate finish, Instant now) {
+        return new Booking(name, roomId, start, finish, BookingStatus.CONFIRMED, now, null);
+    }
+
+    public boolean isExpired(Instant now) {
+        return status == BookingStatus.RESERVED && !now.isBefore(expiresAt);
+    }
+
+    /**
+     * A booking is active as long as it blocks its period for other bookings:
+     * confirmed bookings always, reservations only until they expire.
+     */
+    public boolean isActive(Instant now) {
+        return status == BookingStatus.CONFIRMED
+                || (status == BookingStatus.RESERVED && !isExpired(now));
+    }
+
+    public boolean overlaps(LocalDate otherStart, LocalDate otherFinish) {
+        return start.isBefore(otherFinish) && finish.isAfter(otherStart);
+    }
+
+    public void confirm() {
+        this.status = BookingStatus.CONFIRMED;
+        this.expiresAt = null;
+    }
+
+    public void cancel() {
+        this.status = BookingStatus.CANCELLED;
     }
 
     public long getId() {
         return id;
     }
 
+    public String getName() {
+        return name;
+    }
+
     public long getRoomId() {
         return roomId;
     }
 
-    public Date getStart() {
+    public LocalDate getStart() {
         return start;
     }
 
-    public Date getFinish() {
+    public LocalDate getFinish() {
         return finish;
+    }
+
+    public BookingStatus getStatus() {
+        return status;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getExpiresAt() {
+        return expiresAt;
+    }
+
+    public long getVersion() {
+        return version;
     }
 }

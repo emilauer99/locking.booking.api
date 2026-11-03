@@ -2,12 +2,19 @@ package org.distributed.consensus.controller;
 
 import org.distributed.consensus.model.Booking;
 import org.distributed.consensus.model.BookingPolicies;
+import org.distributed.consensus.model.BookingStatus;
+import org.distributed.consensus.model.CreateBookingRequest;
 import org.distributed.consensus.repository.BookingRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import jakarta.validation.Valid;
+
+import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,6 +24,12 @@ public class OptimisticBookingController {
 
     @Autowired
     BookingRepository bookingRepository;
+
+    @Autowired
+    Clock clock;
+
+    @Value("${booking.reservation-ttl:PT5M}")
+    Duration reservationTtl;
 
     @GetMapping("/booking/{id}")
     public ResponseEntity<Booking> getBooking(@PathVariable long id) {
@@ -31,7 +44,9 @@ public class OptimisticBookingController {
     }
 
     @PostMapping("/booking")
-    public ResponseEntity<Booking> createBooking(@RequestBody Booking booking) {
+    public ResponseEntity<Booking> createBooking(@Valid @RequestBody CreateBookingRequest request) {
+        Booking booking = Booking.reserve(request.name(), request.roomId(), request.start(), request.finish(),
+                clock.instant(), reservationTtl);
 
         // unfortunately we cannot guarantee that all locations which might
         // evaluate to false here are not somehow offered to our customers
@@ -42,21 +57,35 @@ public class OptimisticBookingController {
             return new ResponseEntity<>(null, HttpStatus.CONFLICT);
         }
 
-        try {
-            Booking _booking = bookingRepository.save(new Booking(booking.getName(), booking.getRoomId(), booking.getStart(), booking.getFinish()));
-            return new ResponseEntity<>(_booking, HttpStatus.CREATED);
-        } catch (Exception e) {
-            return new ResponseEntity<>(null, HttpStatus.INTERNAL_SERVER_ERROR);
+        // TODO: this check alone is not safe against parallel requests (check-then-act),
+        // the database has to reject overlapping bookings (optimistic locking)
+        if (bookingRepository.existsActiveOverlapping(booking.getRoomId(), booking.getStart(), booking.getFinish(), clock.instant())) {
+            return new ResponseEntity<>(null, HttpStatus.CONFLICT);
         }
+
+        Booking saved = bookingRepository.save(booking);
+        return new ResponseEntity<>(saved, HttpStatus.CREATED);
     }
 
     @DeleteMapping("/booking/{id}")
     public ResponseEntity<HttpStatus> deleteBooking(@PathVariable("id") long id) {
-        try {
-            bookingRepository.deleteById(id);
-            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
-        } catch (Exception e) {
-            return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
+        Optional<Booking> found = bookingRepository.findById(id);
+        if (found.isEmpty()) {
+            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
         }
+
+        // bookings are not deleted physically but cancelled, so a later
+        // confirmation can still see that the booking was cancelled
+        Booking booking = found.get();
+        if (booking.getStatus() == BookingStatus.CONFIRMED) {
+            // a confirmed booking cannot be cancelled anymore
+            return new ResponseEntity<>(HttpStatus.CONFLICT);
+        }
+        if (booking.getStatus() == BookingStatus.RESERVED) {
+            booking.cancel();
+            bookingRepository.save(booking);
+        }
+        // deleting an already cancelled booking is idempotent
+        return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
 }

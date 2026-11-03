@@ -1,6 +1,8 @@
 package org.distributed.consensus;
 
-import java.sql.Date;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 
@@ -36,7 +38,13 @@ public class Application {
     }
 
     @Bean
-    public CommandLineRunner seedBookings(BookingRepository bookingRepository) {
+    public Clock clock() {
+        // a single source of time, so tests can replace it (e.g. to let reservations expire)
+        return Clock.systemUTC();
+    }
+
+    @Bean
+    public CommandLineRunner seedBookings(BookingRepository bookingRepository, Clock clock) {
         return args -> {
             // only seed an empty database, otherwise every restart (or every further
             // api instance) would add the same bookings again
@@ -44,12 +52,14 @@ public class Application {
                 return;
             }
 
+            // sample data is seeded as confirmed, otherwise it would expire after a few minutes
+            Instant now = clock.instant();
             bookingRepository.saveAll(List.of(
-                    new Booking("Blue Room", 1, Date.valueOf("2026-11-02"), Date.valueOf("2026-11-06")),
-                    new Booking("Blue Room", 1, Date.valueOf("2026-11-20"), Date.valueOf("2026-11-23")),
-                    new Booking("Green Room", 2, Date.valueOf("2026-11-10"), Date.valueOf("2026-11-14")),
-                    new Booking("Red Suite", 3, Date.valueOf("2026-12-22"), Date.valueOf("2026-12-27")),
-                    new Booking("Garden View", 4, Date.valueOf("2027-01-05"), Date.valueOf("2027-01-09"))));
+                    Booking.confirmed("Blue Room", 1, LocalDate.parse("2026-11-02"), LocalDate.parse("2026-11-06"), now),
+                    Booking.confirmed("Blue Room", 1, LocalDate.parse("2026-11-20"), LocalDate.parse("2026-11-23"), now),
+                    Booking.confirmed("Green Room", 2, LocalDate.parse("2026-11-10"), LocalDate.parse("2026-11-14"), now),
+                    Booking.confirmed("Red Suite", 3, LocalDate.parse("2026-12-22"), LocalDate.parse("2026-12-27"), now),
+                    Booking.confirmed("Garden View", 4, LocalDate.parse("2027-01-05"), LocalDate.parse("2027-01-09"), now)));
 
             System.out.println("Seeded database with sample bookings.");
         };
